@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Glass Messenger</title>
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#050505">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="apple-touch-icon" href="/static/icon.png">
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+
+    <style>
+        :root {
+            --glass-bg: rgba(255, 255, 255, 0.06);
+            --glass-border: rgba(255, 255, 255, 0.12);
+            --primary: #00f2ff;
+            --primary-grad: linear-gradient(135deg, #00f2ff 0%, #007aff 100%);
+            --bg-deep: #050505;
+            --text-main: #ffffff;
+            --text-sec: rgba(255,255,255,0.6);
+            --online: #00ff88;
+            --offline: #666;
+            --badge-color: #ff3b30;
+            --reply-accent: rgba(255,255,255,0.06);
+        }
+
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        html,body { height:100%; }
+        body {
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-deep);
+            color: var(--text-main);
+            height: 100vh; height: 100dvh;
+            overflow: hidden;
+            background-image:
+                radial-gradient(circle at 0% 0%, rgba(0, 242, 255, 0.12) 0%, transparent 45%),
+                radial-gradient(circle at 100% 100%, rgba(138, 43, 226, 0.12) 0%, transparent 45%),
+                radial-gradient(circle at 50% 50%, #0f0f13 0%, #000000 100%);
+        }
+
+        /* glass base */
+        .glass-panel {
+            background: var(--glass-bg);
+            backdrop-filter: blur(18px);
+            -webkit-backdrop-filter: blur(18px);
+            border: 1px solid var(--glass-border);
+            box-shadow: 0 8px 30px rgba(0,0,0,0.45);
+            border-radius: 20px;
+        }
+
+        /* inputs/buttons */
+        input, textarea {
+            width: 100%; padding: 12px 14px; margin: 0; border-radius: 18px;
+            background: rgba(0,0,0,0.45); border: 1px solid var(--glass-border); color: #fff;
+            outline: none; transition: box-shadow .18s ease, transform .12s ease;
+            font-size: 15px;
+        }
+        input:focus, textarea:focus { box-shadow: 0 6px 20px rgba(0,0,0,0.4); transform: translateY(-1px); border-color: var(--primary); }
+
+        button {
+            background: var(--primary-grad); border: none; color: #fff; font-weight: 700;
+            padding: 12px 14px; border-radius: 14px; cursor: pointer;
+            transition: transform .08s ease, box-shadow .12s ease;
+        }
+        button:active { transform: scale(.98); }
+
+        /* layout screens */
+        #auth-screen, #chat-list, #chat-room, #loading-screen { position: fixed; top: 0; left: 0; width: 100%; height: 100dvh;
+            display:flex; flex-direction:column; transition: transform .35s cubic-bezier(.2,.9,.3,1), opacity .25s; background:transparent;
+        }
+        .hidden { transform: translateX(100%); opacity: 0; pointer-events: none; z-index: 0; }
+        .active { transform: translateX(0); opacity: 1; z-index: 30; }
+
+        #loading-screen { z-index: 60; justify-content:center; align-items:center; }
+        .loader { width:46px; height:46px; border-radius:50%; border:5px solid rgba(255,255,255,0.06); border-top-color:var(--primary); animation:spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg);} }
+
+        /* header */
+        .header { padding: 14px 18px; display:flex; align-items:center; justify-content:space-between; gap:12px;
+            background: rgba(255,255,255,0.02); border-bottom: 1px solid rgba(255,255,255,0.03); z-index:20; padding-top: max(15px, env(safe-area-inset-top));
+        }
+        .header h3 { margin:0; font-size:18px; letter-spacing:0.2px; }
+        .header-btn { background: rgba(255,255,255,0.04); padding:8px 10px; border-radius:10px; border:1px solid rgba(255,255,255,0.02); color:var(--text-main); }
+
+        /* content area */
+        .scroll-content { flex:1; overflow-y:auto; padding: 10px 0; -webkit-overflow-scrolling: touch; }
+        .contact-item { padding: 14px 18px; margin: 0 12px 12px 12px; display:flex; align-items:center; border-radius:14px; gap:12px; transition: transform .12s ease, background .12s ease; }
+        .contact-item:active { transform: translateY(1px); background: rgba(255,255,255,0.02); }
+
+        .avatar { width:52px; height:52px; border-radius:50%; background: linear-gradient(45deg,#ff00cc,#3333ff); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:18px; color:#fff; position:relative; flex-shrink:0; }
+        .status-dot { position:absolute; bottom:-2px; right:-2px; width:14px; height:14px; border-radius:50%; border:2px solid #050505; background:var(--offline); }
+        .status-online { background: var(--online); box-shadow: 0 0 8px var(--online); }
+
+        .unread-badge { background:var(--badge-color); color:#fff; border-radius:16px; padding:4px 8px; font-size:12px; margin-left:auto; box-shadow: 0 4px 12px rgba(255,59,48,0.28); }
+
+        /* chat room */
+        .messages-area {
+            flex:1; overflow-y:auto; padding: 18px; display:flex; flex-direction:column; gap:12px; -webkit-overflow-scrolling:touch;
+        }
+        .message {
+            max-width: 82%; padding: 12px 16px; border-radius: 16px; font-size:15px; position: relative; word-break: break-word;
+            opacity:0; transform: translateY(6px) scale(.995); animation: msgIn .28s ease forwards;
+        }
+        @keyframes msgIn { to { opacity:1; transform: translateY(0) scale(1);} }
+        .msg-in { align-self: flex-start; background: rgba(255,255,255,0.06); color:#eee; border-bottom-left-radius:6px; }
+        .msg-out { align-self:flex-end; background: var(--primary-grad); color:#fff; border-bottom-right-radius:6px; padding-right:44px; }
+
+        .msg-meta { font-size:11px; opacity:0.75; margin-top:6px; color:var(--text-sec); }
+        .msg-status { position:absolute; bottom:8px; right:10px; font-size:11px; opacity:0.9; }
+
+        /* reply preview inside bubble */
+        .reply-preview { border-left: 3px solid rgba(255,255,255,0.14); padding-left:8px; margin-bottom:8px; font-size:13px; color:var(--text-sec); background: var(--reply-accent); border-radius:10px; padding:8px; }
+
+        /* input area */
+        .chat-input-area { flex-shrink:0; padding:10px 14px; display:flex; gap:10px; align-items:center; background: rgba(0,0,0,0.55); border-top:1px solid rgba(255,255,255,0.03); padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+        .chat-input { flex:1; display:flex; gap:8px; align-items:center; }
+        .chat-input input { border-radius: 999px; padding:12px 16px; background: rgba(255,255,255,0.03); }
+
+        /* reply bar above input when replying */
+        .reply-bar { display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:12px; background: rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.03); margin-bottom:8px; }
+        .reply-bar .reply-text { font-size:13px; color:var(--text-sec); max-width:70%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+        /* typing indicator */
+        .typing-indicator { font-size: 12px; color: var(--primary); opacity:0; transition: opacity .28s ease; margin-left:6px; }
+        .typing-visible { opacity:1; animation: blinkColors 1.4s infinite; }
+        @keyframes blinkColors { 0%{opacity:0.2} 50%{opacity:1} 100%{opacity:0.2} }
+
+        /* toast */
+        .toast-container { position: fixed; top: 18px; left:50%; transform:translateX(-50%); width:90%; max-width:420px; z-index:110; pointer-events:none; }
+        .toast { pointer-events:auto; background: rgba(18,18,22,0.96); padding:12px; border-radius:12px; border-left:4px solid var(--primary); display:flex; justify-content:space-between; gap:12px; margin-bottom:10px; animation:slideDown .28s ease; }
+        @keyframes slideDown { from{transform: translateY(-8px); opacity:0} to{transform: translateY(0); opacity:1} }
+
+        /* small helpers */
+        .back-btn { background:none; border:none; color:var(--text-main); font-size:20px; padding:6px; }
+        .hidden-el { display:none; }
+
+        /* message swipe visual */
+        .swipe-hint { position:absolute; left:0; top:50%; transform:translateY(-50%); font-size:13px; color:var(--text-sec); opacity:0; transition:opacity .12s ease; pointer-events:none; }
+        .message.swipe-ready { box-shadow: 0 6px 18px rgba(0,0,0,0.45); }
+    </style>
+</head>
+<body>
+    <div id="loading-screen" class="active">
+        <div class="loader"></div>
+    </div>
+
+    <div class="toast-container" id="toast-container"></div>
+
+    <div id="auth-screen" class="hidden">
+        <div class="glass-panel" style="margin:24px; padding:28px;">
+            <h2 id="auth-title">Welcome</h2>
+            <div id="error-box" style="display:none; margin-top:10px; background:rgba(255,51,102,0.08); border:1px solid rgba(255,51,102,0.25); color:#ff3366; padding:8px; border-radius:8px;"></div>
+            <input id="auth-username" placeholder="Имя пользователя" style="margin-top:14px;">
+            <input id="auth-password" placeholder="Пароль" type="password" style="margin-top:8px;">
+            <button id="auth-btn-text" style="margin-top:12px;" onclick="handleAuth()">ВОЙТИ</button>
+            <p style="margin-top:12px; color:var(--text-sec); cursor:pointer;" class="toggle-link" onclick="toggleAuthMode()">Нет аккаунта? Регистрация</p>
+        </div>
+    </div>
+
+    <div id="chat-list" class="hidden">
+        <div class="header">
+            <h3 id="my-username">Profile</h3>
+            <div style="display:flex; gap:8px; align-items:center;">
+                <button id="enable-notif-btn" class="header-btn" onclick="requestNotificationPermission()" style="display:none; color:#00ff88; border:1px solid rgba(0,255,136,0.2);">🔔 Вкл. уведомления</button>
+                <button id="install-btn" class="header-btn" onclick="installApp()" style="display:none; color:var(--primary); border:1px solid var(--primary);">📲 App</button>
+                <button onclick="logout()" class="header-btn">Выйти</button>
+            </div>
+        </div>
+
+        <div style="padding:12px 14px;">
+            <input id="search-input" placeholder="Поиск людей..." oninput="searchUsers()">
+            <div id="search-results" style="margin-top:10px;"></div>
+        </div>
+
+        <div class="scroll-content" id="chats-container"></div>
+    </div>
+
+    <div id="chat-room" class="hidden" style="background: rgba(0,0,0,0.35);">
+        <div class="header">
+            <div style="display:flex; align-items:center; gap:12px;">
+                <button class="back-btn" onclick="closeChat()">←</button>
+                <div style="display:flex; flex-direction:column;">
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <span style="font-weight:700; font-size:16px;" id="chat-partner-name">User</span>
+                        <span class="typing-indicator" id="typing-text">печатает...</span>
+                    </div>
+                    <span class="header-status" id="chat-partner-status">Offline</span>
+                </div>
+            </div>
+            <div style="display:flex; align-items:center;">
+                <div class="status-dot" id="room-status-dot"></div>
+            </div>
+        </div>
+
+        <div class="messages-area" id="messages-area"></div>
+
+        <div style="padding:0 12px 12px;">
+            <div id="reply-area" class="hidden-el"></div>
+            <div class="chat-input-area">
+                <div class="chat-input" style="flex:1;">
+                    <input id="msg-input" placeholder="Сообщение..." />
+                </div>
+                <button id="send-btn" onclick="sendMessage()">➤</button>
+            </div>
+        </div>
+    </div>
+
+<script>
+    // socket
+    const socket = io({ transports: ['websocket', 'polling'] });
+    let currentUser = '';
+    let currentPartner = '';
+    let isRegisterMode = false;
+    let typingTimeout = null;
+    let replyTo = null; // id of message we reply to
+    let replyToPreviewText = '';
+
+    // -- Utilities
+    function q(id){ return document.getElementById(id); }
+    function formatTimeAgo(isoString) {
+        if(!isoString) return 'Был(а) недавно';
+        const date = new Date(isoString);
+        const now = new Date();
+        const diffSec = Math.floor((now - date) / 1000);
+        if(diffSec < 60) return 'только что';
+        const diffMin = Math.floor(diffSec / 60);
+        if(diffMin < 60) return `${diffMin} мин. назад`;
+        const diffHour = Math.floor(diffMin / 60);
+        if(diffHour < 24) return `${diffHour} ч. назад`;
+        return `${Math.floor(diffHour/24)} дн. назад`;
+    }
+
+    // --- Service Worker & Notifications ---
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/static/sw.js').then(reg => {
+            console.log('SW registered', reg);
+        }).catch(err => console.warn('SW failed', err));
+    }
+
+    function checkNotificationPermission() {
+        if (!("Notification" in window)) return;
+        // show button when not granted
+        if (Notification.permission !== 'granted') {
+            q('enable-notif-btn').style.display = 'block';
+        } else {
+            q('enable-notif-btn').style.display = 'none';
+        }
+    }
+
+    async function requestNotificationPermission() {
+        if (!("Notification" in window)) return alert("Ваш браузер не поддерживает уведомления");
+        const permission = await Notification.requestPermission();
+        checkNotificationPermission();
+        if (permission === 'granted') {
+            // notify via service worker if possible
+            const reg = await navigator.serviceWorker.getRegistration();
+            if (reg && reg.showNotification) {
+                reg.showNotification('Glass Messenger', { body: 'Уведомления включены!', icon: '/static/icon.png' });
+            } else {
+                new Notification('Glass Messenger', { body: 'Уведомления включены!', icon: '/static/icon.png' });
+            }
+        } else if (permission === 'denied') {
+            alert('Уведомления заблокированы в настройках браузера. Разрешите их вручную.');
+        }
+    }
+
+    async function sendRealNotification(sender, text) {
+        if (!("Notification" in window)) return;
+        if (Notification.permission !== 'granted') return; // don't spam
+
+        // prefer service worker showNotification (works when tab backgrounded)
+        try {
+            const reg = await navigator.serviceWorker.getRegistration();
+            if (reg && reg.showNotification) {
+                reg.showNotification(`Новое сообщение от ${sender}`, {
+                    body: text,
+                    icon: '/static/icon.png',
+                    vibrate: [120, 80],
+                    data: { sender }
+                });
+            } else {
+                new Notification(`Новое сообщение от ${sender}`, {
+                    body: text,
+                    icon: '/static/icon.png'
+                });
+            }
+        } catch (e) {
+            try { new Notification(`Новое сообщение от ${sender}`, { body: text, icon: '/static/icon.png' }); } catch(_) {}
+        }
+    }
+
+    // PWA install
+    let deferredPrompt = null;
+    window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredPrompt = e; q('install-btn').style.display = 'block'; });
+    async function installApp(){ if (!deferredPrompt) return; deferredPrompt.prompt(); const choice = await deferredPrompt.userChoice; deferredPrompt = null; q('install-btn').style.display='none'; }
+
+    // --- Session + load
+    window.addEventListener('load', () => { checkSession(); checkNotificationPermission(); });
+
+    async function checkSession() {
+        try {
+            const res = await fetch('/check_session');
+            const data = await res.json();
+            if (data.status === 'logged_in') {
+                currentUser = data.username;
+                q('my-username').innerText = currentUser;
+                socket.emit('join', { username: currentUser });
+                await loadChats();
+                switchScreen('chat-list');
+            } else {
+                switchScreen('auth-screen');
+            }
+        } catch (e) {
+            switchScreen('auth-screen');
+        } finally {
+            q('loading-screen').classList.remove('active');
+            q('loading-screen').classList.add('hidden');
+        }
+    }
+
+    // auth
+    function toggleAuthMode() {
+        isRegisterMode = !isRegisterMode;
+        q('auth-title').innerText = isRegisterMode ? 'Регистрация' : 'Вход';
+        q('auth-btn-text').innerText = isRegisterMode ? 'РЕГИСТРАЦИЯ' : 'ВОЙТИ';
+        document.querySelector('.toggle-link').innerText = isRegisterMode ? 'Уже есть аккаунт? Войти' : 'Нет аккаунта? Регистрация';
+    }
+
+    async function handleAuth() {
+        const u = q('auth-username').value.trim();
+        const p = q('auth-password').value.trim();
+        if (!u || !p) { showErr('Заполните поля'); return; }
+        const endpoint = isRegisterMode ? '/register' : '/login';
+        try {
+            const res = await fetch(endpoint, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({username:u, password:p}) });
+            const data = await res.json();
+            if (data.status === 'success') {
+                currentUser = data.username;
+                q('my-username').innerText = currentUser;
+                socket.emit('join', { username: currentUser });
+                await loadChats();
+                switchScreen('chat-list');
+                checkNotificationPermission();
+            } else showErr(data.message || 'Ошибка входа');
+        } catch (e) { showErr('Ошибка соединения'); }
+    }
+    async function logout() { await fetch('/logout', { method:'POST' }); location.reload(); }
+    function showErr(msg) { const box = q('error-box'); box.innerText = msg; box.style.display = 'block'; setTimeout(()=>box.style.display='none', 3500); }
+    function switchScreen(id) {
+        document.querySelectorAll('body > div').forEach(el => { el.classList.add('hidden'); el.classList.remove('active'); });
+        q(id).classList.remove('hidden'); q(id).classList.add('active');
+    }
+
+    // --- Chats list
+    async function loadChats() {
+        try {
+            const res = await fetch('/get_chats');
+            const chats = await res.json();
+            const container = q('chats-container');
+            if (!chats || chats.length === 0) { container.innerHTML = '<div style="text-align:center;opacity:0.5;margin-top:40px;">Нет диалогов</div>'; return; }
+            container.innerHTML = chats.map(u => {
+                const statusText = u.online ? 'Online' : formatTimeAgo(u.last_seen);
+                return `
+                    <div class="contact-item glass-panel" onclick="openChat('${u.username}')">
+                        <div class="avatar">${u.username[0].toUpperCase()}<div class="status-dot ${u.online ? 'status-online':''}" id="status-${u.username}"></div></div>
+                        <div style="margin-left:12px; flex:1;">
+                            <div style="font-weight:600; font-size:16px;">${u.username}</div>
+                            <div class="last-msg-info" id="last-seen-${u.username}" style="color:var(--text-sec); font-size:13px;">${statusText}</div>
+                        </div>
+                        ${u.unread > 0 ? `<div class="unread-badge">${u.unread}</div>` : ''}
+                    </div>
+                `;
+            }).join('');
+        } catch (e) {
+            console.warn('loadChats error', e);
+        }
+    }
+
+    // --- Open chat / history
+    async function openChat(partner) {
+        currentPartner = partner;
+        q('chat-partner-name').innerText = partner;
+        q('messages-area').innerHTML = '';
+        replyTo = null; hideReplyBar();
+
+        const res = await fetch('/get_history', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ partner }) });
+        const data = await res.json();
+        updateHeaderStatus(data.partner_status.online, data.partner_status.last_seen);
+        data.messages.forEach(renderMessage);
+        switchScreen('chat-room');
+        scrollToBottom();
+        loadChats();
+    }
+
+    function updateHeaderStatus(isOnline, lastSeenIso) {
+        const statusEl = q('chat-partner-status');
+        const roomDot = q('room-status-dot');
+        if (isOnline) {
+            statusEl.innerText = 'Online'; statusEl.style.color = 'var(--online)'; roomDot.classList.add('status-online');
+        } else {
+            statusEl.innerText = formatTimeAgo(lastSeenIso); statusEl.style.color = 'var(--text-sec)'; roomDot.classList.remove('status-online');
+        }
+    }
+
+    function closeChat() { currentPartner = ''; loadChats(); switchScreen('chat-list'); }
+
+    // --- send message (with reply support)
+    async function sendMessage() {
+        const input = q('msg-input');
+        const text = input.value.trim();
+        if (!text || !currentPartner) return;
+        const payload = { sender: currentUser, receiver: currentPartner, text: text, replied_to: replyTo };
+        socket.emit('send_message', payload);
+        input.value = '';
+        replyTo = null; hideReplyBar();
+        socket.emit('stop_typing', { sender: currentUser, receiver: currentPartner });
+    }
+
+    // --- render messages, including reply preview
+    function renderMessage(data) {
+        const isMe = data.sender === currentUser;
+        const container = q('messages-area');
+
+        const div = document.createElement('div');
+        div.className = `message ${isMe ? 'msg-out':'msg-in'} glass-panel`;
+        div.dataset.msgId = data.id ?? '';
+        // build html
+        let replyHtml = '';
+        if (data.replied_to && data.replied_text) {
+            const who = data.replied_sender && data.replied_sender !== currentUser ? data.replied_sender + ':' : '';
+            replyHtml = `<div class="reply-preview">${who} ${escapeHtml(data.replied_text)}</div>`;
+        }
+        let checkmarks = '';
+        if (isMe) checkmarks = `<span class="msg-status ${data.is_read ? 'read':''}">${data.is_read ? '✓✓' : '✓'}</span>`;
+        div.innerHTML = `
+            <div class="swipe-hint">Ответить ↩</div>
+            ${replyHtml}
+            <div class="msg-text">${escapeHtml(data.text)}</div>
+            ${checkmarks}
+        `;
+
+        // attach swipe handlers to enable swipe-left to reply
+        attachSwipeToReply(div, data);
+
+        container.appendChild(div);
+        scrollToBottom();
+
+        // if received in current chat, mark read realtime
+        if (!isMe && currentPartner === data.sender) {
+            socket.emit('mark_read_realtime', { sender: data.sender, reader: currentUser });
+        }
+    }
+
+    function escapeHtml(s) { if (!s) return ''; return s.replace(/[&<>"']/g, (m)=> ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+
+    function scrollToBottom() { const area = q('messages-area'); setTimeout(()=> area.scrollTop = area.scrollHeight + 200, 60); }
+
+    // --- in-app toast
+    function showInAppToast(sender, text) {
+        const container = q('toast-container');
+        const toast = document.createElement('div');
+        toast.className = 'toast';
+        toast.innerHTML = `<div style="display:flex;flex-direction:column;"><strong>${escapeHtml(sender)}</strong><small style="opacity:.8;">${escapeHtml(text)}</small></div>
+            <div style="display:flex;align-items:center;gap:8px;"><button onclick="this.closest('.toast').remove(); openChat('${sender}')">Ответить</button></div>`;
+        container.appendChild(toast);
+        setTimeout(()=> { toast.style.opacity = '0'; setTimeout(()=> toast.remove(), 300); }, 4200);
+    }
+
+    // --- Socket events
+    socket.on('connect', () => { if (currentUser) socket.emit('join', { username: currentUser }); });
+    socket.on('new_message', (data) => {
+        // data contains id, sender, receiver, text, replied_to, replied_text, is_read
+        const isMe = data.sender === currentUser;
+        // if message is for user
+        if (!isMe && data.receiver === currentUser) {
+            if (currentPartner === data.sender) {
+                renderMessage(data);
+            } else {
+                // not in that chat -> in-app toast + system notification
+                showInAppToast(data.sender, data.text);
+                // If page is hidden -> show system notification
+                if (document.hidden) sendRealNotification(data.sender, data.text);
+                // update chat list
+                loadChats();
+            }
+        } else if (isMe && currentPartner === data.receiver) {
+            // my sent message (server echoes)
+            renderMessage(data);
+            loadChats();
+        }
+    });
+
+    socket.on('update_chat_list', () => { if (!q('chat-list').classList.contains('hidden')) loadChats(); });
+
+    socket.on('user_status_change', (data) => {
+        const dot = document.getElementById(`status-${data.username}`);
+        if (dot) data.status === 'online' ? dot.classList.add('status-online') : dot.classList.remove('status-online');
+        if (data.status === 'offline' && data.last_seen) {
+            const lastSeenEl = document.getElementById(`last-seen-${data.username}`);
+            if (lastSeenEl) lastSeenEl.innerText = formatTimeAgo(data.last_seen);
+        }
+        if (currentPartner === data.username) updateHeaderStatus(data.status === 'online', data.last_seen);
+    });
+
+    socket.on('display_typing', (data) => { if (currentPartner === data.sender) q('typing-text').classList.add('typing-visible'); });
+    socket.on('hide_typing', (data) => { if (currentPartner === data.sender) q('typing-text').classList.remove('typing-visible'); });
+    socket.on('messages_read', (data) => {
+        if (currentPartner === data.reader) document.querySelectorAll('.msg-status').forEach(el => { el.classList.add('read'); el.innerText = '✓✓'; });
+    });
+
+    // --- typing emit
+    q('msg-input').addEventListener('input', () => {
+        if (!currentPartner || !currentUser) return;
+        socket.emit('typing', { sender: currentUser, receiver: currentPartner });
+        if (typingTimeout) clearTimeout(typingTimeout);
+        typingTimeout = setTimeout(()=> socket.emit('stop_typing', { sender: currentUser, receiver: currentPartner }), 2000);
+    });
+
+    // --- search
+    async function searchUsers() {
+        const query = q('search-input').value;
+        const resBox = q('search-results');
+        if (query.length < 1) { resBox.innerHTML = ''; return; }
+        try {
+            const res = await fetch('/search_user', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ query }) });
+            const users = await res.json();
+            resBox.innerHTML = users.map(u => `<div style="padding:10px;border-radius:10px;background:rgba(255,255,255,0.02);margin-top:8px;display:flex;justify-content:space-between;align-items:center;"><span>${u}</span><button onclick="openChat('${u}')">Написать</button></div>`).join('');
+        } catch(e) { console.warn(e); }
+    }
+
+    // --- swipe-to-reply handlers
+    function attachSwipeToReply(el, messageData) {
+        let startX = 0, curX = 0, moved = false;
+        const threshold = 60; // pixels
+        el.addEventListener('touchstart', (ev) => {
+            startX = ev.touches[0].clientX;
+            moved = false;
+            el.style.transition = '';
+            el.classList.remove('swipe-ready');
+        }, { passive:true });
+
+        el.addEventListener('touchmove', (ev) => {
+            curX = ev.touches[0].clientX;
+            const dx = curX - startX;
+            if (dx < 0) {
+                moved = true;
+                el.style.transform = `translateX(${dx}px)`;
+                if (Math.abs(dx) > 20) el.classList.add('swipe-ready');
+            }
+        }, { passive:true });
+
+        el.addEventListener('touchend', () => {
+            el.style.transition = 'transform .18s cubic-bezier(.2,.9,.25,1)';
+            const dx = curX - startX;
+            if (moved && dx < -threshold) {
+                // trigger reply
+                startReply(messageData.id, messageData.text, messageData.sender);
+            } else {
+                el.style.transform = '';
+                el.classList.remove('swipe-ready');
+            }
+            startX = curX = 0; moved = false;
+        });
+        // also support long press / click (desktop)
+        el.addEventListener('contextmenu', (ev) => { ev.preventDefault(); startReply(messageData.id, messageData.text, messageData.sender); });
+        el.addEventListener('dblclick', () => { startReply(messageData.id, messageData.text, messageData.sender); });
+    }
+
+    function startReply(msgId, text, sender) {
+        replyTo = msgId;
+        replyToPreviewText = text;
+        showReplyBar(sender, text);
+        q('msg-input').focus();
+    }
+
+    function showReplyBar(sender, text) {
+        const area = q('reply-area');
+        area.className = '';
+        area.innerHTML = `<div class="reply-bar glass-panel">
+            <div style="display:flex;flex-direction:column;">
+                <div style="font-size:12px;color:var(--text-sec);">Ответ ${escapeHtml(sender)}</div>
+                <div class="reply-text">${escapeHtml(text)}</div>
+            </div>
+            <div style="margin-left:auto;"><button onclick="cancelReply()" title="Отменить">✕</button></div>
+        </div>`;
+    }
+
+    function hideReplyBar() { const area = q('reply-area'); area.className = 'hidden-el'; area.innerHTML = ''; }
+    function cancelReply(){ replyTo = null; replyToPreviewText = ''; hideReplyBar(); }
+
+    // --- helpers for outside handlers
+    window.openChat = openChat; // used from generated chat-list HTML
+
+</script>
+</body>
+                                                                                                                                                                                                  </html>
